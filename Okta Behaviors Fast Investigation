@@ -1,0 +1,18 @@
+dataset = okta_sso_raw
+| alter debugdata=json_extract(debugContext, "$.debugData")
+| alter behaviors = if(json_extract(debugContext, "$.debugData.behaviors") != null,
+    replex(json_extract(debugContext, "$.debugData.behaviors"),"\"",""),
+    replex(replex(json_extract(json_extract_scalar(debugContext, "$.debugData.logOnlySecurityData"), "$.behaviors"), "\":\"", "="), "\"","")
+)
+| filter behaviors contains "POSITIVE"
+| alter Username=json_extract(actor, "$.displayName")
+| alter Outcome=json_extract(outcome, "$.result")
+| alter User = trim(Username, "\"")
+| filter User = $User
+| alter Result = trim(Outcome, "\"")
+| alter Src_IP=json_extract(Client, "$.ipAddress")
+| alter Source = trim(Src_IP, "\"")
+| iploc Source loc_continent AS Continent ,loc_country AS IP_Address_Country, loc_region AS IP_Address_Region, loc_city as IP_Address_City
+| alter _TIME = format_timestamp("%m/%d/%Y %H:%M:%S %p", _TIME)
+| alter AM_PM = arrayindex(regextract(_TIME, "\b(?:am|pm)\b"),0)
+| fields _time, AM_PM, User, Result, behaviors 
