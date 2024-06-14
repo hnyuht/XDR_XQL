@@ -1,0 +1,11 @@
+dataset = xdr_data
+| filter event_type = FILE and
+(event_sub_type = ENUM.FILE_WRITE or event_sub_type = ENUM.FILE_CREATE_NEW) and
+
+action_file_extension in ("exe", "dll", "zip", "7z", "ps1", "html", "hta") and
+
+action_file_path ~= "Users\\Public\\[^\\]*?"
+
+| fields event_type, event_sub_type, agent_hostname, actor_effective_username, action_file_path,action_file_extension, actor_process_image_name, causality_actor_process_image_name
+| alter _TIME = format_timestamp("%m/%d/%Y %H:%M:%S %p", _TIME)
+| alter AM_PM = arrayindex(regextract(_TIME, "\b(?:am|pm)\b"),0)
