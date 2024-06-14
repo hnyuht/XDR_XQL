@@ -1,0 +1,9 @@
+config case_sensitive = false timeframe=365d
+| dataset = host_inventory
+| filter applications != null
+| arrayexpand applications
+| alter applicationName=json_extract(applications, "$.application_name")
+| alter applicationVersion=json_extract(applications, "$.version")
+| filter applicationName contains "INSERT SOFTWARE"
+| fields applicationName, applicationVersion, ip_addresses, host_name
+| dedup host_name
