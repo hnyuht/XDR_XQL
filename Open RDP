@@ -1,0 +1,40 @@
+//Query to identify hosts that have a large number of failed logons and RDP connections from external IPs
+dataset = xdr_data 
+|filter event_type = NETWORK AND action_local_port = 3389 
+|fields event_id, action_local_port, action_remote_ip, agent_hostname, DST_ACTION_COUNTRY
+
+//Filter out connections from rfc 1918
+|alter rfc1918_172 = incidr(action_remote_ip, "172.16.0.0/12")
+|alter rfc1918_10 =  incidr(action_remote_ip, "10.0.0.0/8")
+|alter rfc1918_192 = incidr(action_remote_ip, "192.168.0.0/16")
+|filter rfc1918_172 = false and rfc1918_10 = false and rfc1918_192 = false
+
+|comp count_distinct(action_remote_ip) as unique_external_ips by agent_hostname
+
+| join conflict_strategy = right type=right 
+(dataset = xdr_data // Using the xdr dataset
+ | filter event_type = EVENT_LOG and action_evtlog_event_id = 4625 // Filtering by windows event log and id 4625
+ | alter User_Name =arrayindex(regextract(action_evtlog_message, "Account For Which Logon Failed:\r\n.*\r\n.*Account Name:.*?(\w.*)\r\n"),0), Logon_Type = arrayindex(regextract(action_evtlog_message, "Logon Type:.*?(\d+)\r\n"),0), Failure_Reason = arrayindex(regextract(action_evtlog_message,"Failure Reason:.*?(\w.*)\r\n"),0), Domain = arrayindex(regextract(action_evtlog_message, "Account For Which Logon Failed:\r\n.*\r\n.*.*\r\n.*Account Domain:.*?(\w.*?)\r\n"),0), Source_IP = arrayindex(regextract(action_evtlog_message, "Source Network Address:.*?(\d+\.\d+\.\d+\.\d+)\r\n"),0), Caller_Process_Name = arrayindex(regextract(action_evtlog_message, "Caller Process Name:.*?(\w.*)\r\n"),0), Host_Name = arrayindex(regextract(action_evtlog_message, "Workstation Name:.*?(\w.*)\r\n"),0) // Using regextract to get just a part of the full event log message into an array, then using arrayindex to take the first item in the array
+ |filter Logon_Type = "3" or Logon_Type = "10"
+ | fields agent_hostname, User_Name, Host_Name, Domain, Logon_Type, Failure_Reason, Source_IP, Caller_Process_Name // Select all the fields to show them
+ |comp count_distinct(USER_NAME) as unique_failed_users by AGENT_HOSTNAME ) as failed_multiple_users failed_multiple_users.agent_hostname = agent_hostname
+
+ | join conflict_strategy = right type=right 
+( 
+dataset = xdr_data // Using the xdr dataset
+ | filter event_type = EVENT_LOG and action_evtlog_event_id = 4625 // Filtering by windows event log and id 4625
+ | alter User_Name =arrayindex(regextract(action_evtlog_message, "Account For Which Logon Failed:\r\n.*\r\n.*Account Name:.*?(\w.*)\r\n"),0), Logon_Type = arrayindex(regextract(action_evtlog_message, "Logon Type:.*?(\d+)\r\n"),0), Failure_Reason = arrayindex(regextract(action_evtlog_message,"Failure Reason:.*?(\w.*)\r\n"),0), Domain = arrayindex(regextract(action_evtlog_message, "Account For Which Logon Failed:\r\n.*\r\n.*.*\r\n.*Account Domain:.*?(\w.*?)\r\n"),0), Source_IP = arrayindex(regextract(action_evtlog_message, "Source Network Address:.*?(\d+\.\d+\.\d+\.\d+)\r\n"),0), Caller_Process_Name = arrayindex(regextract(action_evtlog_message, "Caller Process Name:.*?(\w.*)\r\n"),0), Host_Name = arrayindex(regextract(action_evtlog_message, "Workstation Name:.*?(\w.*)\r\n"),0) // Using regextract to get just a part of the full event log message into an array, then using arrayindex to take the first item in the array
+ |filter Logon_Type = "3" or Logon_Type = "10"
+ | fields agent_hostname, event_id,User_Name, Host_Name, Domain, Logon_Type, Failure_Reason, Source_IP, Caller_Process_Name // Select all the fields to show them
+ |comp count(event_id) as total_failed_logons by AGENT_HOSTNAME  
+) as failed_multiple_logons failed_multiple_logons.agent_hostname = agent_hostname
+
+ | join conflict_strategy = right type=right 
+( 
+dataset = xdr_data 
+|filter event_type = NETWORK AND action_local_port = 3389 
+|fields event_id, action_local_port, action_remote_ip, agent_hostname, action_country 
+
+|comp count_distinct(action_country) as unique_countries by AGENT_HOSTNAME ) as failed_multiple_countries failed_multiple_countries.agent_hostname  = agent_hostname
+
+|filter unique_external_ips >=5 and unique_failed_users >=5 and total_failed_logons > 100 and unique_countries > 2
