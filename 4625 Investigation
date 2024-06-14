@@ -1,0 +1,58 @@
+config case_sensitive = false
+
+
+//Section One - Logon Failures
+| dataset = xdr_data
+//Use the forensics_event_log dataset
+|filter event_type=ENUM.EVENT_LOG AND action_evtlog_event_id = 4625 and agent_hostname = $agent_hostname
+
+|alter WorkstationName = trim(json_extract(action_evtlog_data_fields,"$.WorkstationName"),"\"")
+|alter WorkstationName = uppercase(WorkstationName)
+|alter Logon_Type = trim(json_extract(action_evtlog_data_fields,"$.LogonType"),"\"")
+|alter Ip_Address = trim(json_extract(action_evtlog_data_fields,"$.IpAddress"),"\"")
+|alter TargetDomainName = trim(json_extract(action_evtlog_data_fields,"$.TargetDomainName"),"\"")
+|alter Target_User_Name = trim(json_extract(action_evtlog_data_fields,"$.TargetUserName"),"\"")
+|alter event_generated1 = to_timestamp(event_timestamp, "millis")
+|alter eventDay = extract_time(event_generated1 , "DAYOFYEAR"), eventHour = extract_time(event_generated1, "HOUR")
+|alter Failure_Reason = trim(json_extract(action_evtlog_data_fields,"$.FailureReason"),"\"")
+
+
+//Filter for noninteractive/interactive remote logon events and remove null usernames
+| filter Logon_Type in ("3", "10") and IP_Address not in("","-","LOCAL", "127.0.0.1", "::1") and Target_User_Name not in (" ","") and Target_User_Name not contains "$"
+
+//Interpret %%2313 failure reason
+| filter Failure_Reason != "%%2304"
+| alter Failure_Reason = if (Failure_Reason = "%%2313", "Unknown user name or bad password", Failure_Reason)
+| alter Failure_Reason = if (Failure_Reason = "%%2307", "Account locked out", Failure_Reason)
+| alter Failure_Reason = if (Failure_Reason = "%%2308", "The user has not been granted the requested logon type at this machine", Failure_Reason)
+| alter Failure_Reason = if (Failure_Reason = "%%2309", "The specified account's password has expired.", Failure_Reason)
+| alter Failure_Reason = if (Failure_Reason = "%%2310", "Account currently disabled", Failure_Reason)
+
+|bin _time span=24
+
+//Compute failure count by host and user by the hour
+| comp count() as failCount, max(event_generated1) as lastFail, min(event_generated1) as firstFail, values(Failure_Reason) as Failure_Reason, count_distinct(Target_User_Name) as fail_unique_username_count, values(agent_hostname) as fail_target_host_name, count_distinct(agent_hostname) as fail_unique_target_host_name_count, count_distinct(IP_Address) by Target_User_Name, Logon_Type, Ip_Address 
+
+// Adjust Filter based on the failcount 
+| filter failCount > 5
+
+| sort desc failCount 
+| join type= inner 
+(dataset = xdr_data
+|filter event_type=ENUM.EVENT_LOG AND action_evtlog_event_id = 4624
+|alter WorkstationName = trim(json_extract(action_evtlog_data_fields,"$.WorkstationName"),"\"")
+|alter WorkstationName = uppercase(WorkstationName)
+|alter Logon_Type = trim(json_extract(action_evtlog_data_fields,"$.LogonType"),"\"")
+|alter Ip_Address = trim(json_extract(action_evtlog_data_fields,"$.IpAddress"),"\"")
+|alter TargetDomainName = trim(json_extract(action_evtlog_data_fields,"$.TargetDomainName"),"\"")
+|alter Target_User_Name = trim(json_extract(action_evtlog_data_fields,"$.TargetUserName"),"\"")
+|alter event_generated1 = to_timestamp(event_timestamp, "millis")
+|alter eventDay = extract_time(event_generated1 , "DAYOFYEAR"), eventHour = extract_time(event_generated1, "HOUR")
+
+
+//Filter for noninteractive/interactive remote logon events and remove null usernames
+| filter Logon_Type in ("3", "10") and IP_Address not in("","-","LOCAL", "127.0.0.1", "::1") and Target_User_Name not in (" ","") and Target_User_Name not contains "$"
+|bin _time span=24h
+
+//Compute failure count by host and user by the hour
+| comp count() as successCount, max(event_generated1) as lastSuccess, min(event_generated1) as firstSuccess, count_distinct(IP_Address) as Success_src_ip, count_distinct(Target_User_Name) as Success_unique_username_count, values(agent_hostname) as Success_target_host_name, count_distinct(agent_hostname) as Success_unique_target_host_name_count by Target_User_Name, Logon_Type) as success success.firstSuccess > lastFail and success.Target_User_Name = Target_User_Name 
